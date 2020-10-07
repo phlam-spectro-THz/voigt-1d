@@ -34,7 +34,7 @@ def pre_treatement(filelist, dir_='sample_data/OCS/'):
 
     sos = cheby2(4, 60, 10, output='sos', fs=1e3, btype='highpass')
     counter = 1
-    conn = sqlite3.connect('OCS_freq.db')
+    conn = sqlite3.connect(dir_+'OCS_freq.db')
     c = conn.cursor()
 
     for f, phi01, phi02 in filelist:
