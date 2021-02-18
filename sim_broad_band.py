@@ -2,7 +2,7 @@
 
 import numpy as np
 from scipy.signal.windows import kaiser
-from lib import best_snr_zero_a, best_snr_fwhm_zero_a
+from lib import best_snr_zero_a, best_snr_fwhm_zero_a, best_snr_fwhm_fix_1p
 
 CONST_AV = 6.02214086e23        # constant, Avogadro (mol-1)
 CONST_KB = 1.38064852e-23       # constant, Boltzmann (J/K)
@@ -34,20 +34,23 @@ def print_v1d_par(fc, cplen=500, delay=250, mass=60, temp=300, ll0=0.1,):
     b0_avg = ll0 * np.pi + 2 * a0_avg * t0_avg * 1e-3  # MHz
     a_snr, b_snr = best_snr_zero_a(a0_avg, b0_avg)
     a_fwhm, b_fwhm = best_snr_fwhm_zero_a(a0_avg, b0_avg, x0=np.array([b0_avg]))
+    a_resol, b_resol = best_snr_fwhm_fix_1p(a0_avg, b0_avg, x0=np.array([2*a0_avg + b0_avg**2]),
+                                            pfix='b', pvalue=-b0_avg)
     print('a0_avg={:6.4f}, b0_avg={:6.4f}, a_snr={:6.4f}, b_snr={:6.4f}, '
-          'a_fwhm={:6.4f}, b_fwhm={:6.4f}'.format(
-            a0_avg, b0_avg, a_snr, b_snr, a_fwhm, b_fwhm))
+          'a_fwhm={:6.4f}, b_fwhm={:6.4f}, a_resol={:6.4f}, b_resol={:6.4f}'.format(
+            a0_avg, b0_avg, a_snr, b_snr, a_fwhm, b_fwhm, a_resol, b_resol))
 
 
-def run(catfile='', fidfile='', ftfile='', band=(10, 20), fs=50, cplen=500,
-        delay=250, datalen=10000, mass=60, temp=300, ll0=0.1, num=1000,
-        a_pow=0.5, rand_phi=False, noise=0.01):
+def run(catfile='', fidfile='', ftfile='', band=(10, 20), flo=10, fs=50,
+        cplen=500, delay=250, datalen=10000, mass=60, temp=300, ll0=0.1,
+        num=1000, a_pow=0.5, rand_phi=False, noise=0.01):
     """ Simulate a broadband FID signal
     :arguments
         catfile: str            JPL/CDMS catalog file (to sim real molecular spectra)
         fidfile: str            FID output filename
         ftfile: str             FT output filename
         band: tuple             chirp band (start, stop), GHz
+        flo: float              LO frequency, GHz
         fs: float               sampling frequency, GHz
         cplen: int              chirp lenght, ns
         delay: int              DAQ delay, ns
@@ -73,7 +76,7 @@ def run(catfile='', fidfile='', ftfile='', band=(10, 20), fs=50, cplen=500,
         logint = data[:, 1]
         intens = np.power(10, logint - np.max(logint))
         # make the strongest line as intensity 1
-        fpks_if = fpks_mol - flow
+        fpks_if = np.abs(fpks_mol - flo)
         if rand_phi:
             phis = np.random.rand(len(fpks_mol)) * np.pi * 2
         else:
@@ -88,7 +91,7 @@ def run(catfile='', fidfile='', ftfile='', band=(10, 20), fs=50, cplen=500,
             phis = np.zeros(num)
 
     # delay times for each peak
-    t0s = (1 - fpks_if / bw) * cplen + delay
+    t0s = (fup - fpks_mol) / bw * cplen + delay
     # calculate initial a0 & b0 values.
     a0s = calc_a0(fpks_mol, mass, temp)
     a0_avg = calc_a0((flow + fup)/2, mass, temp) * 1e6  # convert to MHz^2
@@ -109,34 +112,45 @@ def run(catfile='', fidfile='', ftfile='', band=(10, 20), fs=50, cplen=500,
     zp = 4
     x = np.fft.rfftfreq(len(t)*zp) * fs
     y = np.abs(np.fft.rfft(fid, len(t)*zp, norm='ortho'))
-    idx = x < bw
+    xbound1 = abs(flow - flo)
+    xbound2 = abs(fup - flo)
+    if xbound1 < xbound2:
+        idx = np.logical_and(x > xbound1, x < xbound2)
+    else:
+        idx = np.logical_and(x < xbound1, x > xbound2)
 
     a_snr, b_snr = best_snr_zero_a(a0_avg, b0_avg)
     a_fwhm, b_fwhm = best_snr_fwhm_zero_a(a0_avg, b0_avg, x0=np.array([b0_avg]))
+    a_resol = a0_avg
+    b_resol = - 2 * np.sqrt(a_resol)
     print('a0_avg={:6.4f}, b0_avg={:6.4f}, a_snr={:6.4f}, b_snr={:6.4f}, '
-          'a_fwhm={:6.4f}, b_fwhm={:6.4f}'.format(
-            a0_avg, b0_avg, a_snr, b_snr, a_fwhm, b_fwhm))
+          'a_fwhm={:6.4f}, b_fwhm={:6.4f}, a_resol={:6.4f}, b_resol={:6.4f}'.format(
+            a0_avg, b0_avg, a_snr, b_snr, a_fwhm, b_fwhm, a_resol, b_resol))
 
     wf = np.exp(- a_snr * (t*1e-3)**2 - b_snr * 1e-3 * t) * t * 1e-3
-    y_v1d = np.abs(np.fft.rfft(fid * wf, len(t)*zp, norm='ortho'))
+    y_v1d = np.abs(np.fft.rfft(fid * wf, len(t)*zp))
     wf = np.exp(- a_fwhm * (t*1e-3)**2 - b_fwhm * 1e-3 * t) * t * 1e-3
-    y_v1d_fwhm = np.abs(np.fft.rfft(fid * wf, len(t)*zp, norm='ortho'))
-    y_kaiser = np.abs(np.fft.rfft(fid * kaiser(len(t), 8), len(t)*zp, norm='ortho'))
+    y_v1d_fwhm = np.abs(np.fft.rfft(fid * wf, len(t)*zp))
+    wf = np.exp(- a_resol * (t * 1e-3)**2 - b_resol * 1e-3 * t) * t * 1e-3
+    y_v1d_resol = np.abs(np.fft.rfft(fid * wf, len(t)*zp))
+    y_kaiser = np.abs(np.fft.rfft(fid * kaiser(len(t), 8), len(t)*zp))
 
-    data = np.column_stack((x, y/np.max(y), y_v1d/np.max(y_v1d),
-                            y_v1d_fwhm/np.max(y_v1d_fwhm),
-                            y_kaiser/np.max(y_kaiser)))
+    data = np.column_stack((x, y/y.max(), y_v1d/y_v1d.max(),
+                            y_v1d_fwhm/y_v1d_fwhm.max(),
+                            y_kaiser/y_kaiser.max(),
+                            y_v1d_resol/y_v1d_resol.max()))
 
-    np.savetxt(ftfile, data[idx, :], fmt=['%8.6f'] + ['%9.6f']*4,
-               header='   x       yraw    v1d_snr   v1d_fwhm   kaiser')
+    np.savetxt(ftfile, data[idx, :], fmt=['%8.6f'] + ['%9.6f']*5,
+               header='   x       yraw    v1d_snr   v1d_fwhm   kaiser  v1d_resol')
 
 
 def simulate():
-    run(catfile='sample_data/Catalogs/CAT_furcis_10-20.cat',
-        fidfile='sample_data/broadband_sim_chirp_cis-furfural_10-20_FID.dat',  # FID output filename
-        ftfile='sample_data/broadband_sim_chirp_cis-furfural_10-20_FT.txt',  # FT output filename
-        band=(10, 20),  # bandwidth, GHz
+    run(catfile='sample_data/Catalogs/CAT_furcis_2-20.cat',
+        fidfile='sample_data/broadband_sim_chirp_cis-furfural_2-10_FID.dat',  # FID output filename
+        ftfile='sample_data/broadband_sim_chirp_cis-furfural_2-10_FT.txt',  # FT output filename
+        band=(2, 10),  # bandwidth, GHz
         fs=50,  # sampling frequency, GHz
+        flo=0,  # LO frequency, GHz
         cplen=500,  # chirp length, ns
         delay=250,  # DAQ delay, ns
         datalen=10000,  # data length, ns
@@ -144,7 +158,7 @@ def simulate():
         temp=300,  # temperature, K
         ll0=0.1,  # Lorentzian FWHM, MHz
         rand_phi=True,  # randomize phase if True. If False, generate pure cosine wave for all peaks
-        noise=0.3,  # noise level,
+        noise=0.08,  # noise level,
         )
 
     run(catfile='sample_data/Catalogs/CAT_nmf.cat',
@@ -152,9 +166,10 @@ def simulate():
         ftfile='sample_data/broadband_sim_chirp_N-MF_640-650_FT.txt',  # FT output filename
         band=(640, 650),  # bandwidth, GHz
         fs=50,  # sampling frequency, GHz
+        flo=640,    # LO frequency, GHz
         cplen=500,  # chirp length, ns
         delay=250,  # DAQ delay, ns
-        datalen=625,  # data length, ns
+        datalen=500,  # data length, ns
         mass=59,  # molecular mass, g/mol
         temp=300,  # temperature, K
         ll0=0.1,  # Lorentzian FWHM, MHz
@@ -165,8 +180,8 @@ def simulate():
 
 if __name__ == '__main__':
 
-    print('cis-furfural 10-20 GHz')
-    print_v1d_par(15, mass=96)
+    print('cis-furfural 2-10 GHz')
+    print_v1d_par(6, mass=96)
     print('N-methylformamide 640-650 GHz')
     print_v1d_par(645, mass=59)
 

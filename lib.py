@@ -6,6 +6,7 @@ from copy import deepcopy
 from scipy.special import erfc, wofz, erfcx
 from scipy.optimize import minimize, root
 from scipy.signal.windows import kaiser
+from scipy.interpolate import interp1d
 import lmfit
 
 CONST_AV = 6.02214086e23        # constant, Avogadro (mol-1)
@@ -129,6 +130,19 @@ def sig2vol(raw_int):
     return vol
 
 
+def complex_lorentzian(x, ll, yshift=0.):
+    """ Peak normalized function of the magnitude FT of exponential decay
+    :arguments
+        x: float / np1darray
+        ll: float       Lorentzian FWHM
+        yshift: float   shift of y value (used for root finding)
+    :returns
+        y: float / np1darray
+    """
+
+    return ll / np.sqrt(4 * x**2 + ll**2) - yshift
+
+
 def lorentzian(x, ll, yshift=0.):
     """ Peak normalized Lorentzian function
     :arguments
@@ -166,14 +180,17 @@ def voigt(x, gg, ll, yshift=0.):
         y: float / np1darray
     """
 
-    # calculate Gaussian stdev and Lorentzian gamma
-    sigma = gg / (2 * np.sqrt(2 * np.log(2)))
-    gamma = ll / 2
-    # the complex z for the Faddeeva function
-    # z = (x/gamma + 1j) * np.sqrt(2) * sigma / (4*gamma)
-    z = (x + 1j * gamma) / (sigma * np.sqrt(2))
-    ymax = np.real(wofz(1j * gamma / (sigma * np.sqrt(2))))
-    return np.real(wofz(z)) / ymax - yshift
+    if gg > 0:
+        # calculate Gaussian stdev and Lorentzian gamma
+        sigma = gg / (2 * np.sqrt(2 * np.log(2)))
+        gamma = ll / 2
+        # the complex z for the Faddeeva function
+        # z = (x/gamma + 1j) * np.sqrt(2) * sigma / (4*gamma)
+        z = (x + 1j * gamma) / (sigma * np.sqrt(2))
+        ymax = np.real(wofz(1j * gamma / (sigma * np.sqrt(2))))
+        return np.real(wofz(z)) / ymax - yshift
+    else:
+        return lorentzian(x, ll, yshift=yshift)
 
 
 def complex_voigt(x, gg, ll, yshift=0.):
@@ -187,14 +204,17 @@ def complex_voigt(x, gg, ll, yshift=0.):
         y: float / np1darray
     """
 
-    # calculate Gaussian stdev and Lorentzian gamma
-    sigma = gg / (2 * np.sqrt(2 * np.log(2)))
-    gamma = ll / 2
-    # the complex z for the Faddeeva function
-    # z = (x/gamma + 1j) * np.sqrt(2) * sigma / (4*gamma)
-    z = (x + 1j * gamma) / (sigma * np.sqrt(2))
-    ymax = np.abs(wofz(1j * gamma / (sigma * np.sqrt(2))))
-    return np.abs(wofz(z)) / ymax - yshift
+    if gg > 0:
+        # calculate Gaussian stdev and Lorentzian gamma
+        sigma = gg / (2 * np.sqrt(2 * np.log(2)))
+        gamma = ll / 2
+        # the complex z for the Faddeeva function
+        # z = (x/gamma + 1j) * np.sqrt(2) * sigma / (4*gamma)
+        z = (x + 1j * gamma) / (sigma * np.sqrt(2))
+        ymax = np.abs(wofz(1j * gamma / (sigma * np.sqrt(2))))
+        return np.abs(wofz(z)) / ymax - yshift
+    else:
+        return complex_lorentzian(x, ll, yshift=yshift)
 
 
 def fid_waveform(t, lambda_, delta, t0, norm=False):
@@ -242,7 +262,7 @@ def f2root_raw_fid_max_snr(x, a0, b0):
         return float('inf')
 
 
-def get_fid_tr_len(a0, b0, tunit=1e3):
+def find_fid_tr_len(a0, b0, tunit=1e3):
     """ Return the truncate length of the raw FID for highest SnR
     It is finding the maximum t_max for function:
         1/sqrt(T) * integral[exp(-at^2-bt), t=[0, T]]
@@ -264,53 +284,77 @@ def get_fid_tr_len(a0, b0, tunit=1e3):
     return int(sol.x[0] * tunit)
 
 
-def fwhm_num(x, y):
+def fwhm_num(x, y, ratio=0.5):
     """ Numerically determine the FWHM: find the 1/2 maximum intercept
     and calculate the width
+    the assumption is there's only 1 peak, and x is monotonously increasing
     :argument
         x: np1darray        x data
         y: np1darray        y data
+        ratio: float        ratio * maximum
     :returns
-        fwhm_ab: float         fwhm_ab
+        fw: float           full width at ratio * maximum
     """
+    if ratio >= 1:      # ratio cannot exceed unity
+        return 0
+    # find points above y_max * ratio
+    y_thres = y - y.max() * ratio
+    idx_y_thres = y_thres >= 0
+    # check if all points are above. if so, the FW exceeds the xrange
+    if np.all(idx_y_thres):     # return the width of the x array instead
+        return x.ptp()
+    else:
+        # calculate the difference of the indicies of these elements
+        x_thres_diff = np.diff(np.argwhere(idx_y_thres)[:, 0])
+        # check if xl_thres_diff is broken into several continuous segments
+        if np.any(x_thres_diff > 1):
+            # split x_left & y_left for differences of indicies > 1 (break points)
+            xlist = np.split(x[idx_y_thres], np.argwhere(x_thres_diff > 1)[0] + 1)
+            ylist = np.split(y[idx_y_thres], np.argwhere(x_thres_diff > 1)[0] + 1)
+            # find the segment where the peak position is in
+            x_pk = x[y.argmax()]
+            for i, x_seg in enumerate(xlist):
+                if x_seg.min() < x_pk < x_seg.max():
+                    xl1 = x_seg[0]
+                    xr1 = x_seg[-1]
+                    yl1 = ylist[i][0]
+                    yr1 = ylist[i][-1]
+                    break
+        else:   # if only one segment is found, its boundaries are what we need
+            xl1 = x[idx_y_thres][0]     # the point on the left
+            yl1 = y[idx_y_thres][0]
+            xr1 = x[idx_y_thres][-1]    # the point on the right
+            yr1 = y[idx_y_thres][-1]
+        # the other points should be the ones next to xl1 to the left, and xr1 to the right
+        xl2 = x[x < xl1][-1]
+        yl2 = y[x < xl1][-1]
+        xr2 = x[x > xr1][0]
+        yr2 = y[x > xr1][0]
 
-    y_max = np.max(y)
-    idx_y_max = np.argmax(y)
-    # find x where y(x) = y_max / 2
-    # the data may not have points exactly at y_max / 2, so we need to find the
-    # points closest to it
-    # find 4 points: 2 to the left and 2 to the right of the peak
-    # 2 just above y_max / 2 and 2 just below y_max / 2
-    y_diff = y - y_max / 2
-    # to the left
-    x_left = x[:idx_y_max]
-    y_left = y[:idx_y_max]
-    y_diff_left = y_diff[:idx_y_max]
-    idx = np.argmin(y_diff_left[y_diff_left >= 0])
-    x1 = x_left[y_diff_left >= 0][idx]
-    y1 = y_left[y_diff_left >= 0][idx]
-    idx = np.argmax(y_diff_left[y_diff_left < 0])
-    x2 = x_left[y_diff_left < 0][idx]
-    y2 = y_left[y_diff_left < 0][idx]
-    # to the right
-    x_right = x[idx_y_max:]
-    y_right = y[idx_y_max:]
-    y_diff_right = y_diff[idx_y_max:]
-    idx = np.argmin(y_diff_right[y_diff_right >= 0])
-    x3 = x_right[y_diff_right >= 0][idx]
-    y3 = y_right[y_diff_right >= 0][idx]
-    idx = np.argmax(y_diff_right[y_diff_right < 0])
-    x4 = x_right[y_diff_right < 0][idx]
-    y4 = y_right[y_diff_right < 0][idx]
-    # now fit a quadratic function to it
-    p = np.polyfit([x1, x2, x3, x4], [y1, y2, y3, y4], deg=2)
-    # find the root poly[p] = y_max / 2. p starts from highest order
-    # the difference of the two roots is just 2 * sqrt(b^2-4ac)/2a
-    a, b, c = p
-    c -= y_max / 2
-    fwhm = np.sqrt(b**2 - 4*a*c) / abs(a)
+        # now fit a quadratic function to it
+        p = np.polyfit([xl2, xl1, xr1, xr2], [yl2, yl1, yr1, yr2], deg=2)
+        # find the root poly[p] = y_max / 2. p starts from highest order
+        # the difference of the two roots is just 2 * sqrt(b^2-4ac)/2a
+        a, b, c = p
+        c -= y.max() * ratio
+        fw = np.sqrt(b**2 - 4 * a * c) / abs(a)
 
-    return fwhm
+        return fw
+
+
+def fwxdb_num(x, y, atten):
+    """ Numerically determine the full width at x-db attenuation from the peak
+    :arguments
+        x: np1darray        x data
+        y: np1darray        y data
+        atten: float        attenuation
+    :returns
+        fw: float           full width
+    """
+    if atten == 0:
+        return 0
+    else:
+        return fwhm_num(x, y, ratio=10**(-abs(atten) / 10))
 
 
 def calc_delta_g_coeff(mass, temp):
@@ -998,7 +1042,7 @@ def best_snr_zero_b(a0, b0, x0=np.array([1])):
     return res.x[0], 0
 
 
-def best_snr_fix_1p(a0, b0, x0=np.array([1]), pfix='a0', pvalue=0):
+def best_snr_fix_1p(a0, b0, x0=np.array([1]), pfix='a', pvalue=0):
 
     res = minimize(snr_theo_fix_1p, x0=x0, args=(a0, b0, True, pfix, pvalue))
     if pfix == 'a':
@@ -1034,7 +1078,7 @@ def best_snr_fwhm_zero_b(a0, b0, x0):
     return res.x[0], 0
 
 
-def best_snr_fwhn_fix_1p(a0, b0, x0=np.array([1]), pfix='a0', pvalue=0):
+def best_snr_fwhm_fix_1p(a0, b0, x0=np.array([1]), pfix='a', pvalue=0):
 
     res = minimize(snr_per_fwhm_fix_1p, x0=x0, args=(a0, b0, True, pfix, pvalue))
     if pfix == 'a':
@@ -1205,6 +1249,97 @@ def fwhm_approx(a, b, eq='rough'):
         raise ValueError('invalid eq')
 
 
+def interp_symm(x, y, zp):
+    """ Interpolate symmetric line profile with peak at 0.
+    This can remove the ripples due to zero-padding and spectral leackage
+    :argument
+        x: np1darray
+        y: np1darray
+        zp: len         zero-padding factor
+    :return
+        yintp: np1darray        interpolated y array
+    """
+
+    resol = x[1] - x[0]
+    top_l = []  # top curve on the left
+    bottom_l = []  # bottom curve on the left
+    top_r = []  # top curve on the right
+    bottom_r = []  # bottom curve on the right
+
+    for xx, yy, local_type in _local_extrema(x, y):
+        if local_type == 'min':
+            if xx < 0:
+                bottom_l.append((xx, yy))
+            else:
+                bottom_r.append((xx, yy))
+        else:
+            if xx < 0:
+                top_l.append((xx, yy))
+            else:
+                top_r.append((xx, yy))
+
+    # convert list to numpy arrays
+    top_l = np.array(top_l)
+    bottom_l = np.array(bottom_l)
+    top_r = np.array(top_r)
+    bottom_r = np.array(bottom_r)
+
+    # check length of top/bottom arrays. If they are less than 3 elements
+    # on each sides, then there's no need to interpolate, and return the original array
+    if (top_l.shape[0] <= 3 or bottom_l.shape[0] <= 3
+            or top_r.shape[0] <= 3 or bottom_r.shape[0] <= 3):
+        return y
+
+    # now the peak point is mixed in one of the arrays. find it out and remove it
+    # the point is to find out discontinuous x differences, i.e. diff >> zp
+    _diff = np.diff(top_l[:, 0])
+    idx = np.argwhere(_diff > zp * resol * 1.5)[:, 0]
+    if len(idx):
+        top_l = np.delete(top_l, idx + 1, 0)
+    _diff = np.diff(bottom_l[:, 0])
+    idx = np.argwhere(_diff > zp * resol * 1.5)[:, 0]
+    if len(idx):
+        bottom_l = np.delete(bottom_l, idx + 1, 0)
+    _diff = np.diff(top_r[:, 0])
+    idx = np.argwhere(_diff > zp * resol * 1.5)[:, 0]
+    if len(idx):
+        top_r = np.delete(top_r, idx, 0)
+    _diff = np.diff(bottom_r[:, 0])
+    idx = np.argwhere(_diff > zp * resol * 1.5)[:, 0]
+    if len(idx):
+        bottom_r = np.delete(bottom_r, idx, 0)
+
+    # get center
+    x_endpoint_left = max(top_l[-1, 0], bottom_l[-1, 0])
+    # if top_l[-1, 0] > bottom_l[-1, 0]:
+    #     x_endpoint_left = top_l[-1, 0] + bottom_l[-1, 0] - top_l[-2, 0]
+    # else:
+    #     x_endpoint_left = bottom_l[-1, 0] + top_l[-1, 0] - bottom_l[-2, 0]
+    x_endpoint_right = - x_endpoint_left
+    xl = x[x < x_endpoint_left]
+    xr = x[x > x_endpoint_right]
+    idx_center = np.logical_and(x >= x_endpoint_left, x <= x_endpoint_right)
+    xcenter = x[idx_center]
+    ycenter = y[idx_center]
+    if top_l[-1, 0] > bottom_l[-1, 0]:
+        bottom_l = np.row_stack((bottom_l, np.array([xcenter[0], ycenter[0]])))
+        bottom_r = np.row_stack((np.array([xcenter[-1], ycenter[-1]]), bottom_r))
+    else:
+        top_l = np.row_stack((top_l, np.array([xcenter[0], ycenter[0]])))
+        top_r = np.row_stack((np.array([xcenter[-1], ycenter[-1]]), top_r))
+
+    # interpolate top & bottom curves
+    f1 = interp1d(top_l[:, 0], top_l[:, 1], fill_value="extrapolate")
+    f2 = interp1d(bottom_l[:, 0], bottom_l[:, 1], fill_value="extrapolate")
+    ytp_left = (f1(xl) + f2(xl)) / 2
+
+    f1 = interp1d(top_r[:, 0], top_r[:, 1], fill_value="extrapolate")
+    f2 = interp1d(bottom_r[:, 0], bottom_r[:, 1], fill_value="extrapolate")
+    ytp_right = (f1(xr) + f2(xr)) / 2
+
+    return np.concatenate([ytp_left, ycenter, ytp_right])
+
+
 def snr_per_fwhm_approx(x, a0, b0, neg=False):
     """ SnR per FWHM using approximated Voigt FWHM
     :arguments
@@ -1248,6 +1383,8 @@ def f2min_at_fwhm(lmpar, vv0, fid, zp, bw, pks, snorms, a0, b0, ftype='voigt'):
     t = np.arange(len(fid)) * 1e-3
     wf = np.exp(- v['a'] * t**2 - v['b'] * t) * t
     y = np.abs(np.fft.rfft(fid * wf, zp))
+    if isinstance(zp, type(None)):
+        zp = len(wf)
     x = np.fft.rfftfreq(zp) * 1e3
     xc, yc = to_mol_freq(x, y / np.max(y), bw, f_cutoff=20.)
 
@@ -1300,7 +1437,7 @@ def find_v1d_ab_at_fwhm(fid, zp, bw, vv0, a_init, b_init, pks, snorms, a0, b0,
     return res.params['a'].value, res.params['b'].value
 
 
-def apply_voigt1d(fid, pks, snorms, a0, b0, a, b, zp, bw, flo,
+def apply_voigt1d(fid, pks, snorms, a0, b0, a, b, zp, bw, flo=None,
                   up=True, link_gg=True, link_ll=True, dx_snr=None, dx_snr_mode='outside',
                   f_cutoff=0., ftype='voigt', outfile=''):
 
@@ -1341,10 +1478,12 @@ def apply_voigt1d(fid, pks, snorms, a0, b0, a, b, zp, bw, flo,
         wf = np.ones_like(t)
     else:
         wf = np.exp(- a * t**2 - b * t) * t
+    if isinstance(zp, type(None)):
+        zp = find_fid_tr_len(a0, b0)
     y = np.abs(np.fft.rfft(fid * wf, zp))
     x = np.fft.rfftfreq(zp) * 1e3
     # convert to IF normalized spectrum
-    xc, yc = to_mol_freq(x, y / np.max(y), bw, up=up, f_cutoff=f_cutoff)
+    xc, yc = to_mol_freq(x, y / np.max(y), bw, up=up, flo=flo, f_cutoff=f_cutoff)
     # initial guess
     gg0 = 2 * np.sqrt(np.log(2) * (a + a0)) / np.pi
     ll0 = max((b + b0) / np.pi, 0)
@@ -1447,9 +1586,9 @@ def apply_voigt1d(fid, pks, snorms, a0, b0, a, b, zp, bw, flo,
     return snr, vv_fit
 
 
-def apply_kaiser(fid, pks, snorms, a0, b0, zp, bw, flo, up=True, f_cutoff=0.,
+def apply_kaiser(fid, pks, snorms, a0, b0, zp, bw, flo=None, up=True, f_cutoff=0.,
                  dx_snr=None, dx_snr_mode='outside', link_gg=True, link_ll=True, trunc=False,
-                 ftype='gaussian', outfile=''):
+                 ftype='gaussian', pialpha=8, outfile=''):
 
     """ Apply Kaiser window function, fit the spectrum, and return the treated SnR & FWHM
     :arguments
@@ -1480,20 +1619,18 @@ def apply_kaiser(fid, pks, snorms, a0, b0, zp, bw, flo, up=True, f_cutoff=0.,
     """
 
     if trunc:
-        if a0 == 0:
-            klen = int(2 / b0 * 1e3)
-        else:
-            klen = int((np.sqrt(b0**2 + 4 * a0) - b0) / a0 * 1e3)
-        wf = kaiser(klen, 8)
+        klen = find_fid_tr_len(a0, b0)
+        wf = kaiser(klen, pialpha)
         y = np.abs(np.fft.rfft(fid[:klen] * wf, zp))
     else:
         klen = len(fid)
-        wf = kaiser(klen, 8)
+        wf = kaiser(klen, pialpha)
         y = np.abs(np.fft.rfft(fid * wf, zp))
 
+    if isinstance(zp, type(None)):
+        zp = len(wf)
     x = np.fft.rfftfreq(zp) * 1e3
-    # xc, yc = to_mol_freq(x, y, bw, flo=flo, up=up, f_cutoff=f_cutoff)
-    xc, yc = to_mol_freq(x, y / np.max(y), bw, up=up, f_cutoff=f_cutoff)
+    xc, yc = to_mol_freq(x, y / np.max(y), bw, up=up, flo=flo, f_cutoff=f_cutoff)
 
     # fit this xc & yc
     gg0 = fwhm_num(xc, yc) / 2

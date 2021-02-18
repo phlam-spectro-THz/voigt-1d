@@ -22,8 +22,7 @@ import lmfit
 import sqlite3
 from lib import calc_delta_g_coeff, best_snr_zero_a, \
     best_snr_fwhm_zero_a, fwhm_ab, sig2vol, \
-    apply_kaiser, apply_voigt1d, fwhm_ab_fid, \
-    find_v1d_ab_at_fwhm
+    apply_kaiser, apply_voigt1d, fwhm_ab_fid
 
 
 def pre_treatement(filelist, dir_='sample_data/OCS/'):
@@ -107,7 +106,7 @@ def f2min_tds_1f(lmpar, x, y):
     return y_exp * y_sin + base - y
 
 
-def fit_time_domain(log='fit.log', dir_='../data/OCS/', cut=30, no_t0=False, num=51):
+def fit_time_domain(log='fit.log', dir_='sample_data/OCS/', cut=30, no_t0=False, num=51):
     """ Fit TDS """
 
     log_fmt = '{:>2d} {:^8s} {:>6g} {:>6g} {:>3g} {:>6g} {:>6.4f} ' \
@@ -282,7 +281,7 @@ def fit_ocs_fid():
 
 
 def run(outfile, skip=1, num=51, zp=20000, dir_='sample_data/OCS/',
-        fid_log='fid_fit_no-t0.log'):
+        fid_log='fid_fit_no-t0.log', prefix=''):
     """ New routine that runs selective OCS lines.
     Procedure:
         1. Read the fit.log file to get initial (a0, b0)
@@ -301,21 +300,14 @@ def run(outfile, skip=1, num=51, zp=20000, dir_='sample_data/OCS/',
         zp: int         FID zero-padding length
         dir_: str       file directory
         fid_log: str    FID log
+        prefix: str     file prefix
     """
 
     iter_fid = load_fid_log(path_join(dir_, fid_log), skip=skip)
     out_fmt = '{:>3d} {:>6.4f} {:>6.4f} {:>6.4f} {:>6.4f} {:>7.2f} ' \
               '{:>6.4f} {:>6.4f} {:>6.4f} {:>6.4f} {:>7.2f} ' \
               '{:>6.4f} {:>6.4f} {:>6.4f} {:>6.4f} {:>7.2f} ' \
-              '{:>6.4f} {:>6.4f} {:>6.4f} {:>6.4f} {:>7.2f}  ' \
-              '{:>6.4f} {:>6.4f} {:>6.4f} {:>6.4f} {:>7.2f} ' \
               '{:>6d} {:>6.4f} {:>7.2f} {:>6d} {:>6.4f} {:>7.2f}\n'
-    out_fmt2 = '{:>3d} {:>6.4f} {:>6.4f} {:>6.4f} {:>6.4f} {:>7.2f} ' \
-               '{:>6.4f} {:>6.4f} {:>6.4f} {:>6.4f} {:>7.2f} ' \
-               '{:>6s} {:>6s} {:>6s} {:>6s} {:>7s} ' \
-               '{:>6s} {:>6s} {:>6s} {:>6s} {:>7s} ' \
-               '{:>6s} {:>6s} {:>6s} {:>6s} {:>7s} ' \
-               '{:>6d} {:>6.4f} {:>7.2f} {:>6d} {:>6.4f} {:>7.2f}\n'
     hd = '# Column meaning\n' \
          '# ID: OCS data id\n' \
          '# A0: initial a0 parameter, fitted in time domain \n' \
@@ -333,36 +325,22 @@ def run(outfile, skip=1, num=51, zp=20000, dir_='sample_data/OCS/',
          '# V_AB: FWHM of the windowed line in theory, calculated using A & B values \n' \
          '# V_VOIGT: actual FWHM of the windowed line, determined by the Voigt fit \n' \
          '# SNR: actual SnR of the line windowed by (A_FWHM, B_FWHM) \n' \
-         '# A_KB_F: Voigt-1D window function parameter a to get the same Voigt FWHM as the full length Kaiser window \n' \
-         '# B_KB_F: Voigt-1D window function parameter b to get the same Voigt FWHM as the full length Kaiser window \n' \
-         '# V_AB: FWHM of the windowed line in theory, calculated using A & B values \n' \
-         '# V_VOIGT: actual FWHM of the windowed line, determined by the Voigt fit \n' \
-         '# SNR: actual SnR of the line windowed by (A_KB_F, B_KB_F) \n' \
-         '# A_KB_TR: Voigt-1D window function parameter a to get the same Voigt FWHM as the truncated Kaiser window \n' \
-         '# B_KB_TR: Voigt-1D window function parameter b to get the same Voigt FWHM as the truncated Kaiser window \n' \
-         '# V_AB: FWHM of the windowed line in theory, calculated using A & B values \n' \
-         '# V_VOIGT: actual FWHM of the windowed line, determined by the Voigt fit \n' \
-         '# SNR: actual SnR of the line windowed by (A_KB_TR, B_KB_TR) \n' \
-         '# LEN_KBF: length of the full length Kaiser (pi*a=8)\n' \
-         '# V_KBF: actual FWHM of the line windowed by full length Kaiser (pi*a=8)\n' \
-         '# SNR: actual SnR of the line windowed by full length Kaiser (pi*a=8)\n' \
-         '# LEN_KBTR: length of the truncated Kaiser (pi*a=8)\n' \
-         '# V_KBTR: actual FWHM of the line windowed by truncated Kaiser (pi*a=8) \n' \
+         '# LEN_KB4: length of the truncated Kaiser (pi*a=4)\n' \
+         '# V_KB4: actual FWHM of the line windowed by truncated Kaiser (pi*a=4)\n' \
+         '# SNR: actual SnR of the line windowed by full length Kaiser (pi*a=4)\n' \
+         '# LEN_KB8: length of the truncated Kaiser (pi*a=8)\n' \
+         '# V_KB8: actual FWHM of the line windowed by truncated Kaiser (pi*a=8) \n' \
          '# SNR: actual SnR of the line windowed by truncated Kaiser (pi*a=8) \n'
 
     log_lines = [hd,
                  '# 1    2      3      4      5      6   |'
                  '   7      8      9     10      11  |'
                  '  12     13     14     15      16  |'
-                 '  17      18     19     20      21  |'
-                 '  22      23     24     25     26  |'
-                 '   27    28      29  |   30    31      32  \n',
+                 '   17    18      19  |   20    21      22  \n',
                  '#ID   A0     B0  |VC_AB VC_VOIGT   SNR |'
                  ' A_MAX  B_MAX  V_AB  V_VOIGT  SNR  |'
                  'A_FWHM B_FWHM  V_AB V_VOIGT   SNR  |'
-                 'A_KB_F  B_KB_F  V_AB  V_VOIGT  SNR  |'
-                 'A_KB_TR B_KB_TR V_AB  V_VOIGT SNR  |'
-                 'LEN_KBF V_KBF    SNR |LEN_KBTR V_KBTR  SNR\n']
+                 'LEN_KB4 V_KB4    SNR |LEN_KB8  V_KB8   SNR\n']
 
     count = 0
     while count < num:
@@ -383,63 +361,47 @@ def run(outfile, skip=1, num=51, zp=20000, dir_='sample_data/OCS/',
         vv_ab_fwhm = fwhm_ab(a_fwhm + a0, b_fwhm + b0)
 
         # apply winf to FID and calculate actual SnR & FWHM
+        if flo == fmax:
+            fpk = flo - fpk
+        else:
+            fpk = flo + fpk
 
         # Voigt-1D for max SnR
         snr_max_snr, vv_fit_max_snr = apply_voigt1d(
                 fid, (fpk, ), (1,), a0, b0, a_snr, b_snr, zp, bw, flo,
                 up=(flo == fmax), f_cutoff=30, ftype='voigt',
                 dx_snr=20, dx_snr_mode='inside',
-                outfile=path_join(dir_, 'OCS_{:d}_voigt1d_max_snr.fit'.format(id_))
+                outfile=path_join(dir_, 'OCS_{:d}_{:s}_v1d_max_snr.fit'.format(id_, prefix))
         )
         # Voigt-1D for max SnR/FWHM
         snr_max_snr_fwhm, vv_fit_max_snr_fwhm = apply_voigt1d(
                 fid, (fpk,), (1,), a0, b0, a_fwhm, b_fwhm, zp, bw, flo,
                 up=(flo == fmax), f_cutoff=30,
                 dx_snr=20, dx_snr_mode='inside',
-                outfile=path_join(dir_, 'OCS_{:d}_voigt1d_max_snr_fwhm.fit'.format(id_))
+                outfile=path_join(dir_, 'OCS_{:d}_{:s}_v1d_max_snr-fwhm.fit'.format(id_, prefix))
         )
-        # Full length Kaiser
-        snr_kaiser, vv_fit_kaiser, len_kb = apply_kaiser(
-                fid, (fpk, ), (1, ), a0, b0, zp, bw, flo,
-                up=(flo == fmax), f_cutoff=30, trunc=False,
-                dx_snr=20, dx_snr_mode='inside',
-                outfile=path_join(dir_, 'OCS_{:d}_kaiser_full.fit'.format(id_))
-        )
-        # Now find the (a, b) setting to get the same FWHM as full length kaiser
-        a_kb_f, b_kb_f = find_v1d_ab_at_fwhm(fid, zp, bw, vv_fit_kaiser,
-                                             vv_fit_kaiser / 2, 0,
-                                             (fpk, ), (1, ), a0, b0, ftype='voigt')
-        vv_ab_kbf = fwhm_ab(a_kb_f, b_kb_f)
-        snr_kbf, vv_fit_kbf = apply_voigt1d(
-                fid, (fpk, ), (1,), a0, b0, a_kb_f, b_kb_f, zp, bw, flo,
-                up=(flo == fmax), f_cutoff=30, ftype='voigt',
-                dx_snr=20, dx_snr_mode='inside',
-                outfile=path_join(dir_, 'OCS_{:d}_voigt1d_fwhm_eq_kaiser_full.fit'.format(id_))
-        )
-        # truncated Kaiser
-        snr_kaiser_tr, vv_fit_kaiser_tr, len_kb_tr = apply_kaiser(
+        # truncated Kaiser pi*alpha=8
+        snr_kaiser_tr8, vv_fit_kaiser_tr8, len_kb_tr8 = apply_kaiser(
                 fid, (fpk,), (1,), a0, b0, zp, bw, flo,
                 up=(flo == fmax), f_cutoff=30, trunc=True,
                 dx_snr=20, dx_snr_mode='inside',
-                outfile=path_join(dir_, 'OCS_{:d}_kaiser_trunc.fit'.format(id_))
+                outfile=path_join(dir_, 'OCS_{:d}_{:s}_kaiser8.fit'.format(id_, prefix))
         )
-        # Now find the (a, b) setting to get the same FWHM as truncated Kaiser
-        a_kb_tr, b_kb_tr = find_v1d_ab_at_fwhm(fid, zp, bw, vv_fit_kaiser_tr,
-                                               vv_fit_kaiser_tr, 0,
-                                               (fpk,), (1,), a0, b0, ftype='voigt')
-        vv_ab_kb_tr = fwhm_ab(a_kb_tr, b_kb_tr)
-        snr_kb_tr, vv_fit_kb_tr = apply_voigt1d(
-                fid, (fpk,), (1,), a0, b0, a_kb_tr, b_kb_tr, zp, bw, flo,
-                up=(flo == fmax), f_cutoff=30, ftype='voigt',
-                dx_snr=20, dx_snr_mode='inside',
-                outfile=path_join(dir_, 'OCS_{:d}_voigt1d_fwhm_eq_kaiser_trunc.fit'.format(id_))
+
+        # truncated Kaiser pi*alpha=4
+        snr_kaiser_tr4, vv_fit_kaiser_tr4, len_kb_tr4 = apply_kaiser(
+                fid, (fpk,), (1,), a0, b0, zp, bw, flo,
+                up=(flo == fmax), f_cutoff=30, trunc=True,
+                dx_snr=20, dx_snr_mode='inside', pialpha=4, ftype='gaussian',
+                outfile=path_join(dir_, 'OCS_{:d}_{:s}_kaiser4.fit'.format(id_, prefix))
         )
+
         # finally, unwindowed line (complex voigt), using the length of truncated Kaiser
         snr_raw, vv_fit_raw = apply_voigt1d(
-                fid[:len_kb_tr], (fpk,), (1,), a0, b0, 0, 0, zp, bw, flo,
+                fid[:len_kb_tr8], (fpk,), (1,), a0, b0, 0, 0, zp, bw, flo,
                 up=(flo == fmax), f_cutoff=30, ftype='complex-voigt',
                 dx_snr=20, dx_snr_mode='inside',
-                outfile=path_join(dir_, 'OCS_{:d}_raw_fid.fit'.format(id_))
+                outfile=path_join(dir_, 'OCS_{:d}_{:s}_raw_fid.fit'.format(id_, prefix))
         )
         vv_ab_raw = fwhm_ab_fid(a0, b0)
 
@@ -447,10 +409,8 @@ def run(outfile, skip=1, num=51, zp=20000, dir_='sample_data/OCS/',
                 id_, a0, b0, vv_ab_raw, vv_fit_raw, snr_raw,
                 a_snr, b_snr, vv_ab_snr, vv_fit_max_snr, snr_max_snr,
                 a_fwhm, b_fwhm, vv_ab_fwhm, vv_fit_max_snr_fwhm, snr_max_snr_fwhm,
-                a_kb_f, b_kb_f, vv_ab_kbf, vv_fit_kbf, snr_kbf,
-                a_kb_tr, b_kb_tr, vv_ab_kb_tr, vv_fit_kb_tr, snr_kb_tr,
-                len_kb, vv_fit_kaiser, snr_kaiser,
-                len_kb_tr, vv_fit_kaiser_tr, snr_kaiser_tr
+                len_kb_tr4, vv_fit_kaiser_tr4, snr_kaiser_tr4,
+                len_kb_tr8, vv_fit_kaiser_tr8, snr_kaiser_tr8
         )
        
         log_lines.append(this_line)
@@ -472,4 +432,7 @@ def run(outfile, skip=1, num=51, zp=20000, dir_='sample_data/OCS/',
 if __name__ == '__main__':
 
     fit_ocs_fid()
-    run('sample_data/OCS_voigt1d_vs_kaiser.log', skip=1, fid_log='fid_fit_no-t0.log')
+    run('sample_data/OCS_voigt1d_vs_kaiser_0zp.log', skip=1, zp=None,
+        fid_log='fid_fit_no-t0.log', prefix='0zp')
+    run('sample_data/OCS_voigt1d_vs_kaiser_20kzp.log', skip=1, zp=20000,
+        fid_log='fid_fit_no-t0.log', prefix='20kzp')

@@ -4,7 +4,36 @@
 
 
 import sqlite3
-from pse.convert.spfit import decode_cat
+
+
+def decode_cat(line):
+    """ Decode the line in SPFIT format
+    :argument
+        line: str           a line in .CAT format
+    :returns
+        cat: tuple          a catalog tuple
+            freq: float
+            unc: float
+            inten: float
+            elow: float
+            eup: float
+            qns: list of int
+    """
+
+    freq = float(line[0:13])
+    unc = float(line[13:21])
+    inten = 10**(float(line[21:29]))
+    elow = float(line[31:41])
+    gup = int(line[41:44])
+    qn_str = line[55:67].rstrip()
+    n = len(qn_str)
+    qns_up = list(int(qn_str[idx:idx+2]) for idx in range(0, n, 2))
+    qn_str = line[67:79].rstrip()
+    n = len(qn_str)
+    qns_low = list(int(qn_str[idx:idx + 2]) for idx in range(0, n, 2))
+    eup = elow + freq / 2.99792458e4
+
+    return (freq, unc, inten, elow, eup, gup, *qns_up, *qns_low)
 
 
 def create_db(catalogs):

@@ -8,6 +8,7 @@ import numpy as np
 from scipy.signal import butter, sosfiltfilt
 import lmfit
 from lib import calc_delta_g_coeff, sig2vol
+from v1d_theory import run_v1d_theory as run_sim_snr
 
 
 def load_fid(filename, t1=256, t2=256 + 4096):
@@ -167,7 +168,7 @@ def run_simple(pp, t1=256, savefile='', sim_snr_file='', is_print=True):
     #     print(n, p.value, p.stderr)
 
     if sim_snr_file:
-        run_sim_snr(a0, res.params['b0'].value, outfile=sim_snr_file)
+        run_sim_snr(sim_snr_file, a0, res.params['b0'].value)
 
 
 if __name__ == '__main__':
